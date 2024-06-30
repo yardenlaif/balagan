@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/jessevdk/go-flags"
 )
 
@@ -10,9 +12,11 @@ var opts struct {
 }
 
 func main() {
-	// Parse args
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		return
 	}
+
+	interfaces := findInterfaces(opts.Src)
+	fmt.Printf("interfaces: %v\n", interfaces)
 }
