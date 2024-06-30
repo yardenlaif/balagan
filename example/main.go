@@ -9,16 +9,19 @@ type myInterface interface {
 	Hey()
 }
 
-type t struct{}
+type veryUnique struct{}
 
-func (t *t) Close() error {
+func (a *veryUnique) Close() error {
 	return nil
 }
 
 func main() {
-	var1 := 1
-	var2 := "hello"
-	var v io.Closer = &t{}
-	v.Close()
-	fmt.Printf("%d, %s\n", var1, var2)
+	if newGlobal == "sd" {
+		// sdflkj
+		callMe()
+	}
+	var1 := "hey"
+	var impls io.Closer
+	impls = &veryUnique{}
+	fmt.Printf("%v %v\n", var1, impls)
 }
