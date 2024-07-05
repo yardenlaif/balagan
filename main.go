@@ -1,70 +1,64 @@
 package main
 
 import (
-	"go/ast"
-	"go/importer"
-	"go/parser"
-	"go/token"
-	"go/types"
+	"io"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/jessevdk/go-flags"
-	"golang.org/x/exp/maps"
 )
 
-var opts struct {
-	Src    string `short:"s" long:"source" description:"Directory with code to obfuscate" required:"true"`
-	Target string `short:"t" long:"target" description:"Directory to write obfuscated code to" required:"true"`
-}
-
 func main() {
+	var opts struct {
+		Source string   `short:"s" long:"source" description:"Directory with code to obfuscate" required:"true"`
+		Target string   `short:"t" long:"target" description:"Directory to write obfuscated code to" required:"true"`
+		Ignore []string `short:"i" long:"ignore" description:"Directory to ignore"`
+	}
+
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		return
 	}
-	opts.Src, _ = filepath.Abs(opts.Src)
-	opts.Target, _ = filepath.Abs(opts.Target)
 
-	os.Chdir(opts.Src)
-	os.MkdirAll(opts.Target, 0777)
-	fset := token.NewFileSet()
-	astPkgs := make(map[*ast.Package]struct{})
-	conf := &types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: func(err error) {}}
-	info := &types.Info{
-		Scopes: make(map[ast.Node]*types.Scope),
-		Defs:   make(map[*ast.Ident]types.Object),
-		Uses:   make(map[*ast.Ident]types.Object),
+	opts.Source, err = filepath.Abs(opts.Source)
+	if err != nil {
+		log.Fatalf("Unable to get absolute source path %s: %v", opts.Source, err)
+	}
+	opts.Target, err = filepath.Abs(opts.Target)
+	if err != nil {
+		log.Fatalf("Unable to get absolute target path %s: %v", opts.Target, err)
 	}
 
-	typesPkgs := make(map[*types.Package]struct{})
-	filepath.WalkDir(opts.Src, func(path string, e fs.DirEntry, _ error) error {
-		if e.Type() != fs.ModeDir {
-			if !strings.HasSuffix(e.Name(), ".go") {
-				src, _ := filepath.Abs(e.Name())
-				dest := strings.Replace(src, opts.Src, opts.Target, 1)
-				cmd := exec.Command("cp", src, dest)
-				cmd.Run()
-			}
-			return nil
-		}
-		pkgs, err := parser.ParseDir(fset, path, nil, parser.ParseComments)
+	for i, ignore := range opts.Ignore {
+		opts.Ignore[i], err = filepath.Abs(ignore)
 		if err != nil {
-			log.Fatalf("Unable to parse source directory, error:\n%v", err)
+			log.Fatalf("Unable to get absolute ignore path %s: %v", ignore, err)
 		}
-		for _, astPkg := range pkgs {
-			astPkgs[astPkg] = struct{}{}
-			pkg, _ := conf.Check(path, fset, maps.Values(astPkg.Files), info)
-			typesPkgs[pkg] = struct{}{}
+	}
+
+	if _, err := os.Stat(opts.Target); os.IsNotExist(err) {
+		dir, err := os.Open(opts.Target)
+		if err == nil {
+			_, err = dir.Readdirnames(1)
+			if err != io.EOF {
+				log.Fatalf("Target directory %s is not empty!", opts.Target)
+			}
 		}
-		return nil
-	})
+	}
 
-	obfuscate(opts.Src, opts.Target, fset, maps.Keys(astPkgs), maps.Keys(typesPkgs), info)
+	err = os.MkdirAll(opts.Target, fs.ModePerm)
+	if err != nil {
+		log.Fatalf("Unable to create target directory %s: %v", opts.Target, err)
+	}
 
-	// NewPackageObfuscator(astPkgs, interfaces)
+	obfuscator, err := NewObfuscator(opts.Source, opts.Target, opts.Ignore)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = obfuscator.Obfuscate()
+	if err != nil {
+		log.Fatal(err)
+	}
 }
