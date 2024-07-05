@@ -1,7 +1,7 @@
 # Balagan
 ## A source code obfuscator for go
 
-**Run with caution. Be sure to test the obfuscated code. Open an issue if you encounter one.**
+**Run with caution. May take a few minutes to obfuscate. Be sure to test the obfuscated code. Open an issue if you encounter one.**
 
 # How to use
 ```sh
