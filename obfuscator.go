@@ -1,69 +1,114 @@
 package main
 
 import (
-	"fmt"
 	"go/ast"
+	"go/importer"
+	"go/parser"
 	"go/printer"
 	"go/token"
 	"go/types"
-	"math/rand"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
 )
 
+// Don't obfuscate these names as they hold semantic meaning
 var exclude = map[string]struct{}{"main": {}, "init": {}, "_": {}}
 
-func getAllImports(pkg *types.Package, imports map[*types.Package]struct{}) {
-	if _, ok := imports[pkg]; ok {
-		return
-	}
-	imports[pkg] = struct{}{}
-
-	for _, imp := range pkg.Imports() {
-		getAllImports(imp, imports)
-	}
+type Obfuscator struct {
+	interfaces      map[*types.Interface]struct{}
+	info            *types.Info
+	currentName     int
+	obfuscatedNames map[string]string
+	astPkgs         []*ast.Package
+	fset            *token.FileSet
+	sourcePath      string
+	targetPath      string
 }
 
-func getPublicInterfaces(pkg *types.Package) map[*types.Interface]struct{} {
-	interfaces := make(map[*types.Interface]struct{})
-	for _, name := range pkg.Scope().Names() {
-		typeName, ok := pkg.Scope().Lookup(name).(*types.TypeName)
-		if !ok {
+func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (*Obfuscator, error) {
+	o := &Obfuscator{
+		sourcePath:      sourcePath,
+		targetPath:      targetPath,
+		fset:            token.NewFileSet(),
+		obfuscatedNames: make(map[string]string),
+	}
+
+	// This is necessary for the importer to work
+	err := os.Chdir(sourcePath)
+	if err != nil {
+		return nil, errors.WithMessagef(err, "Unable to change directory to source directory %s", sourcePath)
+	}
+
+	conf := &types.Config{Importer: importer.ForCompiler(o.fset, "source", nil), Error: func(err error) {}}
+	o.info = &types.Info{
+		Scopes: make(map[ast.Node]*types.Scope),
+		Defs:   make(map[*ast.Ident]types.Object),
+		Uses:   make(map[*ast.Ident]types.Object),
+	}
+	astPkgs := make(map[*ast.Package]struct{})
+	typesPkgs := make(map[*types.Package]struct{})
+
+	err = filepath.WalkDir(sourcePath, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		for _, ignore := range ignorePaths {
+			if strings.HasPrefix(path, ignore) {
+				return nil
+			}
+		}
+
+		return o.parseDir(path, e, astPkgs, typesPkgs, conf)
+	})
+	if err != nil {
+		return nil, errors.WithMessagef(err, "Unable to recurse source directory %s", sourcePath)
+	}
+
+	o.interfaces = findInterfaces(maps.Keys(typesPkgs))
+	o.astPkgs = maps.Keys(astPkgs)
+	return o, nil
+}
+
+func (o *Obfuscator) parseDir(path string, e fs.DirEntry, astPkgs map[*ast.Package]struct{}, typesPkgs map[*types.Package]struct{}, conf *types.Config) error {
+	// Only parse directories
+	if e.Type() != fs.ModeDir {
+		return nil
+	}
+
+	pkgs, err := parser.ParseDir(o.fset, path, nil, parser.ParseComments)
+	if err != nil {
+		errors.WithMessagef(err, "Unable to parse source directory %s to AST", path)
+	}
+
+	for _, astPkg := range pkgs {
+		if _, ok := astPkgs[astPkg]; ok {
 			continue
 		}
-		t := typeName.Type()
-		if _, ok := t.(*types.Named); ok {
-			t = t.Underlying()
-		}
-		if i, ok := t.(*types.Interface); ok {
-			interfaces[i] = struct{}{}
-		}
+		astPkgs[astPkg] = struct{}{}
+
+		// Ignore this error, as it may be caused when files that would usually not be compiled in (because of build tags) are included in the type check. Also, it is the user's responsibility to check their code.
+		pkg, _ := conf.Check(path, o.fset, maps.Values(astPkg.Files), o.info)
+		typesPkgs[pkg] = struct{}{}
 	}
-	return interfaces
+	return nil
 }
 
-func getAllPublicInterfaces(pkgs []*types.Package) map[*types.Interface]struct{} {
-	interfaces := make(map[*types.Interface]struct{})
-	for _, pkg := range pkgs {
-		maps.Copy(interfaces, getPublicInterfaces(pkg))
-	}
-	return interfaces
+func (o *Obfuscator) Obfuscate() error {
+	o.createObfuscatedNames()
+	o.obfuscateAST()
+	removeComments(o.astPkgs)
+	return o.writeAST()
 }
 
-func findInterfaces(input string, typesPkgs []*types.Package, fset *token.FileSet, info *types.Info) map[*types.Interface]struct{} {
-	imports := make(map[*types.Package]struct{})
-	for _, pkg := range typesPkgs {
-		// Get all interfaces so we don't mess up a type that should satisfy one of these interfaces
-		getAllImports(pkg, imports)
-	}
-	return getAllPublicInterfaces(maps.Keys(imports))
-}
-
-func funcImplementsInterface(f *types.Func, interfaces map[*types.Interface]struct{}) bool {
+func (o *Obfuscator) funcImplementsInterface(f *types.Func) bool {
 	signature, ok := f.Type().(*types.Signature)
 	if !ok {
 		return false
@@ -73,7 +118,7 @@ func funcImplementsInterface(f *types.Func, interfaces map[*types.Interface]stru
 	}
 
 	recvType := signature.Recv().Type()
-	for i := range interfaces {
+	for i := range o.interfaces {
 		if types.Implements(recvType, i) {
 			return true
 		}
@@ -81,23 +126,25 @@ func funcImplementsInterface(f *types.Func, interfaces map[*types.Interface]stru
 	return false
 }
 
-func createObfuscatedNames(info *types.Info, interfaces map[*types.Interface]struct{}) map[string]string {
-	newNames := make(map[string]string)
-	// Create obfuscated names for all identifiers in file
-	// TODO: Check type switch statement
-	for ident, obj := range info.Defs {
+func (o *Obfuscator) createObfuscatedNames() {
+	for ident, obj := range o.info.Defs {
 		if _, ok := exclude[ident.Name]; ok {
 			continue
 		}
-		if f, ok := obj.(*types.Func); ok && funcImplementsInterface(f, interfaces) {
+		// If this function implements a public interface, don't change it's name so we don't break the interface implementation
+		if f, ok := obj.(*types.Func); ok && o.funcImplementsInterface(f) {
 			continue
 		}
+		// Don't obfuscate Universe objects
 		if obj == nil || obj.Pkg() == nil {
 			continue
 		}
-		newNames[fullName(obj)] = nextName(ident.Name, true)
+		// This can happen when we have multiple files with the same definitions and build constraints to compile only one at a time
+		if _, ok := o.obfuscatedNames[fullName(obj)]; ok {
+			continue
+		}
+		o.obfuscatedNames[fullName(obj)] = o.nextName(obj.Exported())
 	}
-	return newNames
 }
 
 func fullName(obj types.Object) string {
@@ -108,64 +155,68 @@ func fullName(obj types.Object) string {
 	}
 }
 
-func obfuscateAST(astPkgs []*ast.Package, info *types.Info, obfuscatedNames map[string]string) {
-	for ident, obj := range info.Defs {
+func (o *Obfuscator) obfuscateAST() {
+	for ident, obj := range o.info.Defs {
 		if obj == nil || obj.Pkg() == nil {
 			continue
 		}
 		if _, ok := obj.(*types.PkgName); ok {
 			continue
 		}
-		if newName, ok := obfuscatedNames[fullName(obj)]; ok {
+		if newName, ok := o.obfuscatedNames[fullName(obj)]; ok {
 			ident.Name = newName
 		}
 	}
-	for ident, obj := range info.Uses {
+	for ident, obj := range o.info.Uses {
 		if obj == nil || obj.Pkg() == nil {
 			continue
 		}
 		if _, ok := obj.(*types.PkgName); ok {
 			continue
 		}
-		if newName, ok := obfuscatedNames[fullName(obj)]; ok {
+		if newName, ok := o.obfuscatedNames[fullName(obj)]; ok {
 			ident.Name = newName
 		}
 	}
 }
 
-func writeAST(input string, output string, astPkgs []*ast.Package, fset *token.FileSet) {
-	// TODO: Do something with errors returned from Abs
-	// TODO: Make sure output is empty and writable before doing obfuscation
-	input, _ = filepath.Abs(input)
-	output, _ = filepath.Abs(output)
-	fmt.Printf("input: %s, output: %s\n", input, output)
-	for _, astPkg := range astPkgs {
-		for _, file := range astPkg.Files {
-			filename, _ := filepath.Abs(fset.File(file.Pos()).Name())
-			filename = strings.Replace(filename, input, output, 1)
-			dirname := path.Dir(filename)
-			// TODO: Fix dir permissions
-			err := os.MkdirAll(dirname, 0777)
+func (o *Obfuscator) writeASTFile(filename string, file *ast.File) error {
+	dirname := path.Dir(filename)
+	err := os.MkdirAll(dirname, fs.ModePerm)
+	if err != nil {
+		return errors.WithMessagef(err, "Unable to create dir %s", dirname)
+	}
+
+	outFile, err := os.Create(filename)
+	if err != nil {
+		return errors.WithMessagef(err, "Unable to create file %s", filename)
+	}
+	defer func() { _ = outFile.Close() }()
+
+	err = printer.Fprint(outFile, o.fset, file)
+	if err != nil {
+		return errors.WithMessagef(err, "Unable to write AST to file %s", filename)
+	}
+	return nil
+}
+
+func (o *Obfuscator) writeAST() error {
+	for _, astPkg := range o.astPkgs {
+		for filename, file := range astPkg.Files {
+			filename = strings.Replace(filename, o.sourcePath, o.targetPath, 1)
+			err := o.writeASTFile(filename, file)
 			if err != nil {
-				panic(err)
+				return err
 			}
-			outFile, err := os.Create(filename)
-			if err != nil {
-				panic(err)
-			}
-			printer.Fprint(outFile, fset, file)
-			outFile.Close()
 		}
 	}
+	return nil
 }
 
-func obfuscate(input string, output string, fset *token.FileSet, astPkgs []*ast.Package, typesPkgs []*types.Package, info *types.Info) {
-	interfaces := findInterfaces(input, typesPkgs, fset, info)
-	obfuscatedNames := createObfuscatedNames(info, interfaces)
-	obfuscateAST(astPkgs, info, obfuscatedNames)
-	writeAST(input, output, astPkgs, fset)
-}
-
-func nextName(currentName string, isExported bool) string {
-	return currentName + string(rune(rand.Intn(int('z'-'a'))+'a'))
+func (o *Obfuscator) nextName(isExported bool) string {
+	o.currentName++
+	if isExported {
+		return "A" + strconv.Itoa(o.currentName)
+	}
+	return "a" + strconv.Itoa(o.currentName)
 }
