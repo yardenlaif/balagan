@@ -1,4 +1,4 @@
-module github.com/YardenLaif/balagan
+module github.com/yardenlaif/balagan
 
 go 1.20
 
