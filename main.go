@@ -1,9 +1,11 @@
 package main
 
 import (
-	"fmt"
+	"go/parser"
+	"go/token"
 
 	"github.com/jessevdk/go-flags"
+	"golang.org/x/exp/maps"
 )
 
 var opts struct {
@@ -17,6 +19,14 @@ func main() {
 		return
 	}
 
-	interfaces := findInterfaces(opts.Src)
-	fmt.Printf("interfaces: %v\n", interfaces)
+	fset := token.NewFileSet()
+	astPkgs, err := parser.ParseDir(fset, opts.Src, nil, 0)
+	if err != nil {
+		// TODO: Deal with this differently
+		panic(err)
+	}
+
+	obfuscate(opts.Src, fset, maps.Values(astPkgs))
+
+	// NewPackageObfuscator(astPkgs, interfaces)
 }
