@@ -38,10 +38,12 @@ func main() {
 		}
 	}
 
-	if _, err := os.Stat(opts.Target); os.IsNotExist(err) {
+	// Make sure target directory is empty (if it exists at all)
+	if _, err := os.Stat(opts.Target); !os.IsNotExist(err) {
 		dir, err := os.Open(opts.Target)
+		defer func() { _ = dir.Close() }()
 		if err == nil {
-			_, err = dir.Readdirnames(1)
+			_, err := dir.Readdirnames(1)
 			if err != io.EOF {
 				log.Fatalf("Target directory %s is not empty!", opts.Target)
 			}
