@@ -5,16 +5,13 @@
 
 # How to use
 ```sh
-./balagan <source directory> <target directory>
+./balagan -s <source> -t <target>
 ```
 **Arguments**
----
-| Argument | Type | Description |
----
-| source directory | Required | Directory with code to obfuscate |
----
-| target directory | Required | Directory to write obfuscated code to |
----
+| Flag | Name | Type | Description |
+| ---- | ---- | ---- | ----------- |
+| -s | source | Required | Directory with code to obfuscate |
+| -t | target | Required | Directory to write obfuscated code to |
 
 # About
 Balagan will recurse over a directory, obfuscating any go code in its path. It will maintain directory structure, filenames and public names.

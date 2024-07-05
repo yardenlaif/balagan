@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
-	"log"
 	"strings"
 	"unicode"
 
@@ -46,6 +46,17 @@ func (p *PackageObfuscator) Obfuscate() {
 			switch t := node.(type) {
 			case *ast.Ident:
 				p.obfuscateSymbol(t)
+			case *ast.TypeSwitchStmt:
+				assign := t.Assign.(*ast.AssignStmt)
+				fmt.Printf("assign: %v\n", assign)
+				astutil.Apply(node, func(c *astutil.Cursor) bool {
+					switch c.Node().(type) {
+					case *ast.TypeAssertExpr:
+						fmt.Printf("parent: %v %T\n", c.Parent(), c.Parent())
+					}
+					return true
+				}, nil)
+				return false
 			}
 			return true
 		}, nil)
@@ -65,7 +76,6 @@ func (p *PackageObfuscator) obfuscateSymbol(i *ast.Ident) {
 		return
 	}
 	if !p.shouldCreateObfuscation(i) {
-		log.Printf("Not obfuscating: %v\n", i)
 		return
 	}
 	name := i.Name
@@ -80,29 +90,24 @@ func (p *PackageObfuscator) obfuscateSymbol(i *ast.Ident) {
 
 	p.symbols[key] = newName
 	i.Name = newName
+}
 
-	if assign, ok := i.Obj.Decl.(*ast.AssignStmt); ok {
-		for _, lhs := range assign.Lhs {
-			if ident, ok := lhs.(*ast.Ident); ok {
-				ident.Name = newName
-			}
-		}
+func isMainFunc(i *ast.Ident, o types.Object) bool {
+	if _, ok := o.Type().(*types.Signature); ok {
+		return i.Name == "main"
 	}
+	return false
 }
 
 func (p *PackageObfuscator) shouldCreateObfuscation(i *ast.Ident) bool {
 	o := p.typesInfo.ObjectOf(i)
+	if isMainFunc(i, o) {
+		return false
+	}
 	return o != nil && o.Pkg() != nil && o.Pkg().Path() == p.packagePath
 }
 
 func (p *PackageObfuscator) obfuscationKey(i *ast.Ident) (interface{}, bool) {
-	if i.Obj != nil && i.Obj.Decl != nil {
-		if assign, ok := i.Obj.Decl.(*ast.AssignStmt); ok && len(assign.Lhs) == 1 {
-			if _, ok := assign.Rhs[0].(*ast.TypeAssertExpr); ok {
-				return i.Obj.Decl, true
-			}
-		}
-	}
 	o := p.typesInfo.ObjectOf(i)
 	if o == nil {
 		return nil, false
