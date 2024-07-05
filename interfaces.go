@@ -46,7 +46,6 @@ func getAllPublicInterfaces(pkgs []*types.Package) map[*types.Interface]struct{}
 func findInterfaces(typesPkgs []*types.Package) map[*types.Interface]struct{} {
 	imports := make(map[*types.Package]struct{})
 	for _, pkg := range typesPkgs {
-		// Get all interfaces so we don't mess up a type that should satisfy one of these interfaces
 		getAllImports(pkg, imports)
 	}
 	return getAllPublicInterfaces(maps.Keys(imports))
