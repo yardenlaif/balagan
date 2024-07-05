@@ -3,58 +3,38 @@ package main
 import (
 	"go/ast"
 	"go/types"
+	"log"
 	"strings"
 	"unicode"
 
-	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/packages"
 )
 
 type PackageObfuscator struct {
-	symbols             map[types.Object]string
+	symbols             map[interface{}]string
 	currentName         string
 	currentExportedName string
 	packagePath         string
 	noRename            map[types.Object]struct{}
+	typesInfo           *types.Info
+	files               []*ast.File
 }
 
-type symbolMap struct {
-	m map[types.Object]string
-}
-
-func (s *symbolMap) AFact() {}
-
-var SymbolObfuscator = analysis.Analyzer{
-	Name:      "SymbolObfuscator",
-	Doc:       "Obfuscate all symbols",
-	FactTypes: []analysis.Fact{&symbolMap{}},
-	Run: func(p *analysis.Pass) (interface{}, error) {
-		implementations := p.ResultOf[&InterfaceImplementationFinder].(*implementationMap)
-		symbols := make(map[types.Object]string)
-		renamePkgSymbols(symbols, p.TypesInfo, p.Pkg.Path(), p.Files, *implementations)
-		for _, i := range p.Pkg.Imports() {
-			var fact symbolMap
-			p.ImportPackageFact(i, &fact)
-			for k, v := range fact.m {
-				symbols[k] = v
-			}
-		}
-
-		p.ExportPackageFact(&symbolMap{m: symbols})
-		return nil, nil
-	},
-	Requires: []*analysis.Analyzer{&InterfaceImplementationFinder},
-}
-
-func renamePkgSymbols(symbols map[types.Object]string, info *types.Info, pkgName string, files []*ast.File, implementations map[*types.Func][]*types.Func) {
-	p := PackageObfuscator{symbols: symbols, currentName: "a", currentExportedName: "A", packagePath: pkgName, noRename: make(map[types.Object]struct{})}
-	for f, impls := range implementations {
-		for _, impl := range impls {
-			p.noRename[impl] = struct{}{}
-		}
-		p.noRename[f] = struct{}{}
+func NewPackageObfuscator(pkg *packages.Package, info *types.Info, symbols map[interface{}]string, noRename map[types.Object]struct{}) PackageObfuscator {
+	return PackageObfuscator{
+		currentName:         "a",
+		currentExportedName: "A",
+		packagePath:         pkg.PkgPath,
+		noRename:            noRename,
+		symbols:             symbols,
+		typesInfo:           info,
+		files:               pkg.Syntax,
 	}
-	for _, file := range files {
+}
+
+func (p *PackageObfuscator) Obfuscate() {
+	for _, file := range p.files {
 		var root ast.Node
 		ast.Inspect(file, func(n ast.Node) bool {
 			root = n
@@ -65,44 +45,30 @@ func renamePkgSymbols(symbols map[types.Object]string, info *types.Info, pkgName
 			node := c.Node()
 			switch t := node.(type) {
 			case *ast.Ident:
-				p.renameSymbol(info.ObjectOf(t), t)
+				p.obfuscateSymbol(t)
 			}
 			return true
 		}, nil)
 	}
 }
 
-func (p *PackageObfuscator) renameSymbol(o types.Object, i *ast.Ident) {
-	if o == nil || o.Pkg() == nil {
+func (p *PackageObfuscator) obfuscateSymbol(i *ast.Ident) {
+	key, ok := p.obfuscationKey(i)
+	if !ok {
 		return
 	}
-
-	if _, ok := p.noRename[o]; ok {
+	if key == nil {
 		return
 	}
-
-	if newName, ok := p.symbols[o]; ok {
+	if newName, ok := p.symbols[key]; ok {
 		i.Name = newName
 		return
 	}
-
-	// Pkg is nil if o is part of the language (for example - the string type)
-	if o.Pkg() == nil || o.Pkg().Path() != p.packagePath {
+	if !p.shouldCreateObfuscation(i) {
+		log.Printf("Not obfuscating: %v\n", i)
 		return
 	}
-
-	// Don't rename unnamed objects
-	if o.Name() == "" || o.Name() == "_" {
-		return
-	}
-
-	if basic, ok := o.Type().(*types.Basic); ok {
-		if basic.Kind() == types.Invalid {
-			return
-		}
-	}
-
-	name := o.Name()
+	name := i.Name
 	var newName string
 	if unicode.IsUpper(rune(name[0])) {
 		newName = p.currentExportedName
@@ -112,8 +78,48 @@ func (p *PackageObfuscator) renameSymbol(o types.Object, i *ast.Ident) {
 		p.currentName = nextName(p.currentName, false)
 	}
 
-	p.symbols[o] = newName
+	p.symbols[key] = newName
 	i.Name = newName
+
+	if assign, ok := i.Obj.Decl.(*ast.AssignStmt); ok {
+		for _, lhs := range assign.Lhs {
+			if ident, ok := lhs.(*ast.Ident); ok {
+				ident.Name = newName
+			}
+		}
+	}
+}
+
+func (p *PackageObfuscator) shouldCreateObfuscation(i *ast.Ident) bool {
+	o := p.typesInfo.ObjectOf(i)
+	return o != nil && o.Pkg() != nil && o.Pkg().Path() == p.packagePath
+}
+
+func (p *PackageObfuscator) obfuscationKey(i *ast.Ident) (interface{}, bool) {
+	if i.Obj != nil && i.Obj.Decl != nil {
+		if assign, ok := i.Obj.Decl.(*ast.AssignStmt); ok && len(assign.Lhs) == 1 {
+			if _, ok := assign.Rhs[0].(*ast.TypeAssertExpr); ok {
+				return i.Obj.Decl, true
+			}
+		}
+	}
+	o := p.typesInfo.ObjectOf(i)
+	if o == nil {
+		return nil, false
+	}
+	if basic, ok := o.Type().(*types.Basic); ok {
+		if basic.Kind() == types.Invalid {
+			return nil, false
+		}
+	}
+	if _, ok := p.noRename[o]; ok {
+		return nil, false
+	}
+	// Don't rename unnamed objects
+	if o.Name() == "" || o.Name() == "_" {
+		return nil, false
+	}
+	return o, true
 }
 
 func nextName(currentName string, isExported bool) string {
