@@ -1,23 +1,19 @@
 package main
 
 import (
-	"fmt"
 	"go/ast"
-	"go/importer"
-	"go/parser"
 	"go/printer"
 	"go/token"
 	"go/types"
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
+	"golang.org/x/tools/go/packages"
 )
 
 // Don't obfuscate these names as they hold semantic meaning
@@ -28,7 +24,7 @@ type Obfuscator struct {
 	info            *types.Info
 	currentName     int
 	obfuscatedNames map[string]string
-	astPkgs         []*ast.Package
+	astFiles        []*ast.File
 	fset            *token.FileSet
 	sourcePath      string
 	targetPath      string
@@ -40,6 +36,12 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 		targetPath:      targetPath,
 		fset:            token.NewFileSet(),
 		obfuscatedNames: make(map[string]string),
+		info: &types.Info{
+			Defs:   make(map[*ast.Ident]types.Object),
+			Types:  make(map[ast.Expr]types.TypeAndValue),
+			Uses:   make(map[*ast.Ident]types.Object),
+			Scopes: make(map[ast.Node]*types.Scope),
+		},
 	}
 
 	// This is necessary for the importer to work
@@ -48,69 +50,30 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 		return nil, errors.WithMessagef(err, "Unable to change directory to source directory %s", sourcePath)
 	}
 
-	conf := &types.Config{Importer: importer.ForCompiler(o.fset, "source", nil), Error: func(err error) {}}
-	o.info = &types.Info{
-		Scopes: make(map[ast.Node]*types.Scope),
-		Defs:   make(map[*ast.Ident]types.Object),
-		Uses:   make(map[*ast.Ident]types.Object),
-	}
-	astPkgs := make(map[*ast.Package]struct{})
-	typesPkgs := make(map[*types.Package]struct{})
-
-	err = filepath.WalkDir(sourcePath, func(path string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		for _, ignore := range ignorePaths {
-			if strings.HasPrefix(path, ignore) {
-				return nil
-			}
-		}
-
-		return o.parseDir(path, e, astPkgs, typesPkgs, conf)
-	})
+	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedDeps | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax, Fset: o.fset}
+	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		return nil, errors.WithMessagef(err, "Unable to recurse source directory %s", sourcePath)
+		panic(err)
 	}
 
+	typesPkgs := make(map[*types.Package]struct{})
+	for _, pkg := range pkgs {
+		typesPkgs[pkg.Types] = struct{}{}
+		o.astFiles = append(o.astFiles, pkg.Syntax...)
+		maps.Copy(o.info.Types, pkg.TypesInfo.Types)
+		maps.Copy(o.info.Defs, pkg.TypesInfo.Defs)
+		maps.Copy(o.info.Uses, pkg.TypesInfo.Uses)
+		maps.Copy(o.info.Scopes, pkg.TypesInfo.Scopes)
+	}
 	o.interfaces = findInterfaces(maps.Keys(typesPkgs))
-	o.astPkgs = maps.Keys(astPkgs)
+
 	return o, nil
 }
 
-func (o *Obfuscator) parseDir(path string, e fs.DirEntry, astPkgs map[*ast.Package]struct{}, typesPkgs map[*types.Package]struct{}, conf *types.Config) error {
-	// Only parse directories
-	if e.Type() != fs.ModeDir {
-		return nil
-	}
-
-	fmt.Printf("Parsing %-50s    ", path)
-	start := time.Now()
-	pkgs, err := parser.ParseDir(o.fset, path, nil, parser.ParseComments)
-	if err != nil {
-		errors.WithMessagef(err, "Unable to parse source directory %s to AST", path)
-	}
-
-	for _, astPkg := range pkgs {
-		if _, ok := astPkgs[astPkg]; ok {
-			continue
-		}
-		astPkgs[astPkg] = struct{}{}
-
-		// Ignore this error, as it may be caused when files that would usually not be compiled in (because of build tags) are included in the type check. Also, it is the user's responsibility to check their code.
-		pkg, _ := conf.Check(path, o.fset, maps.Values(astPkg.Files), o.info)
-		typesPkgs[pkg] = struct{}{}
-	}
-	fmt.Printf("%s\n", time.Since(start))
-	return nil
-}
-
 func (o *Obfuscator) Obfuscate() error {
-	fmt.Println("Obfuscating...")
 	o.createObfuscatedNames()
 	o.obfuscateAST()
-	removeComments(o.astPkgs)
+	removeComments(o.astFiles)
 	return o.writeAST()
 }
 
@@ -207,13 +170,11 @@ func (o *Obfuscator) writeASTFile(filename string, file *ast.File) error {
 }
 
 func (o *Obfuscator) writeAST() error {
-	for _, astPkg := range o.astPkgs {
-		for filename, file := range astPkg.Files {
-			filename = strings.Replace(filename, o.sourcePath, o.targetPath, 1)
-			err := o.writeASTFile(filename, file)
-			if err != nil {
-				return err
-			}
+	for _, file := range o.astFiles {
+		filename := strings.Replace(o.fset.Position(file.Package).Filename, o.sourcePath, o.targetPath, 1)
+		err := o.writeASTFile(filename, file)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
