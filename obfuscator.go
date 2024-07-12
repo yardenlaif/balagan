@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"golang.org/x/exp/maps"
@@ -83,6 +85,8 @@ func (o *Obfuscator) parseDir(path string, e fs.DirEntry, astPkgs map[*ast.Packa
 		return nil
 	}
 
+	fmt.Printf("Parsing %-50s    ", path)
+	start := time.Now()
 	pkgs, err := parser.ParseDir(o.fset, path, nil, parser.ParseComments)
 	if err != nil {
 		errors.WithMessagef(err, "Unable to parse source directory %s to AST", path)
@@ -98,10 +102,12 @@ func (o *Obfuscator) parseDir(path string, e fs.DirEntry, astPkgs map[*ast.Packa
 		pkg, _ := conf.Check(path, o.fset, maps.Values(astPkg.Files), o.info)
 		typesPkgs[pkg] = struct{}{}
 	}
+	fmt.Printf("%s\n", time.Since(start))
 	return nil
 }
 
 func (o *Obfuscator) Obfuscate() error {
+	fmt.Println("Obfuscating...")
 	o.createObfuscatedNames()
 	o.obfuscateAST()
 	removeComments(o.astPkgs)
