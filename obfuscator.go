@@ -5,9 +5,11 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"io"
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -74,7 +76,7 @@ func (o *Obfuscator) Obfuscate() error {
 	o.createObfuscatedNames()
 	o.obfuscateAST()
 	removeComments(o.astFiles)
-	return o.writeAST()
+	return o.writeFiles()
 }
 
 func (o *Obfuscator) funcImplementsInterface(f *types.Func) bool {
@@ -149,7 +151,8 @@ func (o *Obfuscator) obfuscateAST() {
 	}
 }
 
-func (o *Obfuscator) writeASTFile(filename string, file *ast.File) error {
+func (o *Obfuscator) writeInTargetDir(filename string, write func(*os.File) error) error {
+	filename = strings.Replace(filename, o.sourcePath, o.targetPath, 1)
 	dirname := path.Dir(filename)
 	err := os.MkdirAll(dirname, fs.ModePerm)
 	if err != nil {
@@ -162,21 +165,42 @@ func (o *Obfuscator) writeASTFile(filename string, file *ast.File) error {
 	}
 	defer func() { _ = outFile.Close() }()
 
-	err = printer.Fprint(outFile, o.fset, file)
-	if err != nil {
-		return errors.WithMessagef(err, "Unable to write AST to file %s", filename)
-	}
-	return nil
+	return write(outFile)
 }
 
-func (o *Obfuscator) writeAST() error {
+func (o *Obfuscator) writeASTFile(file *ast.File) error {
+	filename := o.fset.Position(file.Package).Filename
+	return o.writeInTargetDir(filename, func(outFile *os.File) error {
+		err := printer.Fprint(outFile, o.fset, file)
+		return errors.WithMessagef(err, "Unable to write AST to file %s", filename)
+	})
+}
+
+func (o *Obfuscator) writeOtherFile(filename string) error {
+	inFile, err := os.Open(filename)
+	if err != nil {
+		return errors.WithMessagef(err, "Unable to open non-go file %s", filename)
+	}
+	return o.writeInTargetDir(filename, func(outFile *os.File) error {
+		_, err := io.Copy(outFile, inFile)
+		return errors.WithMessagef(err, "Unable to copy non-go file %s to target directory", filename)
+	})
+}
+
+func (o *Obfuscator) writeFiles() error {
 	for _, file := range o.astFiles {
-		filename := strings.Replace(o.fset.Position(file.Package).Filename, o.sourcePath, o.targetPath, 1)
-		err := o.writeASTFile(filename, file)
+		err := o.writeASTFile(file)
 		if err != nil {
 			return err
 		}
 	}
+	filepath.WalkDir(o.sourcePath, func(filename string, d fs.DirEntry, err error) error {
+		if d.IsDir() || path.Ext(filename) == ".go" {
+			return nil
+		}
+		return o.writeOtherFile(filename)
+	})
+
 	return nil
 }
 
