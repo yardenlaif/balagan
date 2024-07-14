@@ -1,0 +1,25 @@
+# Test that balagan doesn't obfuscate init functions
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+! checkSymbol main.go 'myType'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+type myType struct {}
+
+func main() {
+	_ = &myType{}
+}

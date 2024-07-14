@@ -1,0 +1,37 @@
+# Test that balagan doesn't break a type's implementation of an interface
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'Exported called'
+! checkSymbol main.go 'Exported'
+! checkSymbol pkg/function.go 'Exported'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import (
+	"test/main/pkg"
+)
+
+func main() {
+	pkg.Exported()
+}
+-- source/pkg/function.go --
+package pkg
+
+import "fmt"
+
+func Exported() {
+	fmt.Println("Exported called")
+}

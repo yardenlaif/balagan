@@ -1,0 +1,35 @@
+# Test that balagan obfuscates function names even though they implement interfaces
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'foo called'
+! checkSymbol main.go 'foo'
+checkSymbol interface.go 'foo'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+func foo() {
+	fmt.Println("foo called")
+}
+
+func main() {
+	foo()
+}
+-- source/interface.go --
+package main
+
+type myInterface interface { foo() }

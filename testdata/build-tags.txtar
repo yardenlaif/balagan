@@ -1,0 +1,52 @@
+# Test that balagan supports obfuscating files that are excluded by build tags
+
+skip 'Build tags are currently not supported'
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'Exported called from always'
+! checkSymbol main.go 'Exported'
+! checkSymbol pkg/always.go 'Exported'
+! checkSymbol pkg/never.go 'Exported'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import (
+	"test/main/pkg"
+)
+
+func main() {
+	pkg.Exported()
+}
+-- source/pkg/always.go --
+//go:build !never
+// +build !never
+package pkg
+
+import "fmt"
+
+func Exported() {
+	fmt.Println("Exported called from always")
+}
+-- source/pkg/never.go --
+//go:build never
+// +build never
+package pkg
+
+import "fmt"
+
+func Exported() {
+	fmt.Println("Exported called from never")
+}

@@ -1,0 +1,28 @@
+# Test that balagan doesn't obfuscate init functions
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'Foo called'
+! checkSymbol main.go 'foo'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+func foo() { fmt.Println("Foo called") }
+
+func main() {
+	foo()
+}

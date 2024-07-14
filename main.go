@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/yardenlaif/balagan/obfuscator"
 )
 
 func main() {
@@ -55,11 +56,11 @@ func main() {
 		log.Fatalf("Unable to create target directory %s: %v", opts.Target, err)
 	}
 
-	obfuscator, err := NewObfuscator(opts.Source, opts.Target, opts.Ignore)
+	obf, err := obfuscator.NewObfuscator(opts.Source, opts.Target, opts.Ignore)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = obfuscator.Obfuscate()
+	err = obf.Obfuscate()
 	if err != nil {
 		log.Fatal(err)
 	}
