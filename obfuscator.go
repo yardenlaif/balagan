@@ -24,7 +24,7 @@ var exclude = map[string]struct{}{"main": {}, "init": {}, "_": {}}
 type Obfuscator struct {
 	interfaces      map[*types.Interface]struct{}
 	info            *types.Info
-	currentName     int
+	currentName     int64
 	obfuscatedNames map[string]string
 	astFiles        []*ast.File
 	fset            *token.FileSet
@@ -52,7 +52,11 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 		return nil, errors.WithMessagef(err, "Unable to change directory to source directory %s", sourcePath)
 	}
 
-	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedDeps | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax, Fset: o.fset}
+	cfg := &packages.Config{
+		Mode: packages.NeedTypes | packages.NeedDeps | packages.NeedTypesInfo | packages.NeedImports |
+			packages.NeedSyntax,
+		Fset: o.fset,
+	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
 		panic(err)
@@ -115,7 +119,10 @@ func (o *Obfuscator) createObfuscatedNames() {
 		if _, ok := o.obfuscatedNames[fullName(obj)]; ok {
 			continue
 		}
-		o.obfuscatedNames[fullName(obj)] = o.nextName(obj.Exported())
+		fulln := fullName(obj)
+		if o.obfuscatedNames[fulln] == "" {
+			o.obfuscatedNames[fullName(obj)] = o.nextName(obj.Exported())
+		}
 	}
 }
 
@@ -172,11 +179,9 @@ func (o *Obfuscator) writeInTargetDir(filename string, write func(*os.File) erro
 	return write(outFile)
 }
 
-func (o *Obfuscator) writeASTFile(file *ast.File, bundle bool) error {
-	filename := o.fset.Position(file.Package).Filename
-	if bundle {
-		filename = file.Name.String() + ".go"
-	}
+func (o *Obfuscator) writeASTFile(file *ast.File) error {
+	filename := path.Dir(o.fset.Position(file.Package).Filename) + "/" + file.Name.String() + ".go"
+
 	return o.writeInTargetDir(filename, func(outFile *os.File) error {
 		err := printer.Fprint(outFile, o.fset, file)
 		return errors.WithMessagef(err, "Unable to write AST to file %s", filename)
@@ -196,7 +201,7 @@ func (o *Obfuscator) writeOtherFile(filename string) error {
 
 func (o *Obfuscator) writeFiles() error {
 	for _, file := range o.astFiles {
-		err := o.writeASTFile(file, true)
+		err := o.writeASTFile(file)
 		if err != nil {
 			return err
 		}
@@ -214,7 +219,7 @@ func (o *Obfuscator) writeFiles() error {
 func (o *Obfuscator) nextName(isExported bool) string {
 	o.currentName++
 	if isExported {
-		return "A" + strconv.Itoa(o.currentName)
+		return "A" + strconv.FormatInt(o.currentName, 36)
 	}
-	return "a" + strconv.Itoa(o.currentName)
+	return "a" + strconv.FormatInt(o.currentName, 36)
 }

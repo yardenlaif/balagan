@@ -13,9 +13,10 @@ func MergePackageFiles(pkg *packages.Package) *ast.File {
 	// Count the number of package docs, comments and declarations across
 	// all package files. Also, compute sorted list of filenames, so that
 	// subsequent iterations can always iterate in the same order.
-	ndecls := 0
 	var minPos, maxPos token.Pos
 	i := 0
+	var pos token.Pos
+	var ndecls = 0
 	for _, f := range pkg.Syntax {
 		pkg.Name = f.Name.Name
 		i++
@@ -26,64 +27,62 @@ func MergePackageFiles(pkg *packages.Package) *ast.File {
 		if i == 0 || f.FileEnd > maxPos {
 			maxPos = f.FileEnd
 		}
+		if f.Package > pos {
+			// Keep the maximum package clause position as
+			// position for the package clause of the merged
+			// files.
+			pos = f.Package
+		}
 	}
 
 	// Collect import specs from all package files.
-	var imports []*ast.ImportSpec
+	var imports = []*ast.ImportSpec{}
 	for _, f := range pkg.Syntax {
-		imports = append(imports, f.Imports...)
+		for _, imp := range f.Imports {
+			notDupe := true
+			for _, imp2 := range imports {
+				if imp.Path.Value == imp2.Path.Value {
+					notDupe = false
+				}
+			}
+			if notDupe {
+				imports = append(imports, imp)
+			}
+		}
 	}
 
 	// Collect declarations from all package files.
-	var decls []ast.Decl
-	if ndecls > 0 {
-		decls = make([]ast.Decl, ndecls)
-		i := 0 // current index
-		n := 0 // number of filtered entries
+	var decls = make([]ast.Decl, 0, ndecls)
+	i = 0 // current index
 
-		// Remove extra imports
-		for decid, d := range decls {
+	// Add declarations, excluding imports
+	for _, f := range pkg.Syntax {
+		for _, d := range f.Decls {
 			if dd, isGen := d.(*ast.GenDecl); isGen {
-				if dd.Tok == token.IMPORT {
-					decls[decid] = nil
-					n++
+				if dd.Tok == token.IMPORT || dd.Tok == token.COMMENT {
+					continue
 				}
 			}
+			decls = append(decls, d)
 		}
+	}
 
-		// Add deduplicated imports to top of file
+	// Add deduped imports to top of file
+	if len(imports) > 0 {
 		specs := make([]ast.Spec, len(imports))
 		for iid, imp := range imports {
-			iSpec := &ast.ImportSpec{Path: &ast.BasicLit{Value: imp.Path.Value}}
-			specs[iid] = iSpec
+			specs[iid] = imp
 		}
-
 		decls = append([]ast.Decl{
 			&ast.GenDecl{
 				Tok:   token.IMPORT,
 				Specs: specs,
 			},
 		}, decls...)
-
-		// Eliminate nil entries from the decls list if entries were
-		// filtered. We do this using a 2nd pass in order to not disturb
-		// the original declaration order in the source (otherwise, this
-		// would also invalidate the monotonically increasing position
-		// info within a single file).
-		if n > 0 {
-			i = 0
-			for _, d := range decls {
-				if d != nil {
-					decls[i] = d
-					i++
-				}
-			}
-			decls = decls[0:i]
-		}
 	}
 
 	f := &ast.File{
-		Package:   0,
+		Package:   pos,
 		Name:      ast.NewIdent(pkg.Name),
 		Decls:     decls,
 		FileStart: minPos,
