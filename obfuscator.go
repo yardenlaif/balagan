@@ -61,7 +61,8 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 	typesPkgs := make(map[*types.Package]struct{})
 	for _, pkg := range pkgs {
 		typesPkgs[pkg.Types] = struct{}{}
-		o.astFiles = append(o.astFiles, pkg.Syntax...)
+		file := MergePackageFiles(pkg)
+		o.astFiles = append(o.astFiles, file)
 		maps.Copy(o.info.Types, pkg.TypesInfo.Types)
 		maps.Copy(o.info.Defs, pkg.TypesInfo.Defs)
 		maps.Copy(o.info.Uses, pkg.TypesInfo.Uses)
@@ -153,6 +154,9 @@ func (o *Obfuscator) obfuscateAST() {
 
 func (o *Obfuscator) writeInTargetDir(filename string, write func(*os.File) error) error {
 	filename = strings.Replace(filename, o.sourcePath, o.targetPath, 1)
+	if !strings.Contains(filename, o.targetPath) {
+		filename = o.targetPath + "/" + filename
+	}
 	dirname := path.Dir(filename)
 	err := os.MkdirAll(dirname, fs.ModePerm)
 	if err != nil {
@@ -168,8 +172,11 @@ func (o *Obfuscator) writeInTargetDir(filename string, write func(*os.File) erro
 	return write(outFile)
 }
 
-func (o *Obfuscator) writeASTFile(file *ast.File) error {
+func (o *Obfuscator) writeASTFile(file *ast.File, bundle bool) error {
 	filename := o.fset.Position(file.Package).Filename
+	if bundle {
+		filename = file.Name.String() + ".go"
+	}
 	return o.writeInTargetDir(filename, func(outFile *os.File) error {
 		err := printer.Fprint(outFile, o.fset, file)
 		return errors.WithMessagef(err, "Unable to write AST to file %s", filename)
@@ -189,7 +196,7 @@ func (o *Obfuscator) writeOtherFile(filename string) error {
 
 func (o *Obfuscator) writeFiles() error {
 	for _, file := range o.astFiles {
-		err := o.writeASTFile(file)
+		err := o.writeASTFile(file, true)
 		if err != nil {
 			return err
 		}
