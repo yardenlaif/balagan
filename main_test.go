@@ -2,7 +2,6 @@ package main_test
 
 import (
 	"bufio"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -53,7 +52,8 @@ func startsWithUnderscore(ts *testscript.TestScript, neg bool, args []string) {
 	trimmed := strings.Trim(text, " \t")
 	if neg && trimmed[0] == '_' {
 		ts.Fatalf("%s:%d starts with underscore: %s", filename, line, text)
-	} else {
+	}
+	if !neg && trimmed[0] != '_' {
 		ts.Fatalf("%s:%d does not start with underscore: %s", filename, line, text)
 	}
 }
@@ -66,7 +66,6 @@ func checkSymbol(ts *testscript.TestScript, neg bool, args []string) {
 	found := false
 	ast.Inspect(file, func(n ast.Node) bool {
 		if ident, ok := n.(*ast.Ident); ok {
-			fmt.Printf("ident: %s\n", ident.Name)
 			if symbol == ident.Name {
 				if neg {
 					ts.Fatalf("Found symbol %s in %s:\n\n%s", symbol, filename, fileContent)
