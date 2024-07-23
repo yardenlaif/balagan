@@ -1,0 +1,41 @@
+# Test that balagan obfuscates a method that exists in an interface when its receiver doesn't implement that interface
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'foo called'
+! checkSymbol main.go 'foo'
+checkSymbol interface.go 'foo'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+type myType struct{}
+
+func (m *myType) foo() {
+	fmt.Println("foo called")
+}
+
+func main() {
+	m := &myType{}
+	m.foo()
+}
+-- source/interface.go --
+package main
+
+type myInterface interface {
+	foo()
+	bar()
+}

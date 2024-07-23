@@ -1,4 +1,4 @@
-package main
+package obfuscator
 
 import (
 	"go/types"

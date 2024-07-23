@@ -1,6 +1,7 @@
-package main
+package obfuscator
 
 import (
+	"fmt"
 	"go/ast"
 	"go/printer"
 	"go/token"
@@ -21,11 +22,13 @@ import (
 // Don't obfuscate these names as they hold semantic meaning
 var exclude = map[string]struct{}{"main": {}, "init": {}, "_": {}}
 
+type objID any
+
 type Obfuscator struct {
 	interfaces      map[*types.Interface]struct{}
 	info            *types.Info
 	currentName     int
-	obfuscatedNames map[string]string
+	obfuscatedNames map[objID]string
 	astFiles        []*ast.File
 	fset            *token.FileSet
 	sourcePath      string
@@ -37,7 +40,7 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 		sourcePath:      sourcePath,
 		targetPath:      targetPath,
 		fset:            token.NewFileSet(),
-		obfuscatedNames: make(map[string]string),
+		obfuscatedNames: make(map[objID]string),
 		info: &types.Info{
 			Defs:   make(map[*ast.Ident]types.Object),
 			Types:  make(map[ast.Expr]types.TypeAndValue),
@@ -52,10 +55,10 @@ func NewObfuscator(sourcePath string, targetPath string, ignorePaths []string) (
 		return nil, errors.WithMessagef(err, "Unable to change directory to source directory %s", sourcePath)
 	}
 
-	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedDeps | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax, Fset: o.fset}
+	cfg := &packages.Config{Mode: packages.NeedTypes | packages.NeedDeps | packages.NeedTypesInfo | packages.NeedImports | packages.NeedSyntax | packages.NeedFiles, Fset: o.fset}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
-		panic(err)
+		return nil, errors.WithMessage(err, "Unable to load packages")
 	}
 
 	typesPkgs := make(map[*types.Package]struct{})
@@ -111,19 +114,17 @@ func (o *Obfuscator) createObfuscatedNames() {
 			continue
 		}
 		// This can happen when we have multiple files with the same definitions and build constraints to compile only one at a time
-		if _, ok := o.obfuscatedNames[fullName(obj)]; ok {
+		if _, ok := o.obfuscatedNames[id(obj)]; ok {
+			fmt.Printf("dup: %v\n", obj)
 			continue
 		}
-		o.obfuscatedNames[fullName(obj)] = o.nextName(obj.Exported())
+		fmt.Printf("obfuscating: %v\n", obj)
+		o.obfuscatedNames[id(obj)] = o.nextName(obj.Exported())
 	}
 }
 
-func fullName(obj types.Object) string {
-	if !obj.Exported() {
-		return obj.Id()
-	} else {
-		return obj.Pkg().Name() + "." + obj.Id()
-	}
+func id(obj types.Object) objID {
+	return obj
 }
 
 func (o *Obfuscator) obfuscateAST() {
@@ -134,7 +135,7 @@ func (o *Obfuscator) obfuscateAST() {
 		if _, ok := obj.(*types.PkgName); ok {
 			continue
 		}
-		if newName, ok := o.obfuscatedNames[fullName(obj)]; ok {
+		if newName, ok := o.obfuscatedNames[id(obj)]; ok {
 			ident.Name = newName
 		}
 	}
@@ -145,7 +146,7 @@ func (o *Obfuscator) obfuscateAST() {
 		if _, ok := obj.(*types.PkgName); ok {
 			continue
 		}
-		if newName, ok := o.obfuscatedNames[fullName(obj)]; ok {
+		if newName, ok := o.obfuscatedNames[id(obj)]; ok {
 			ident.Name = newName
 		}
 	}

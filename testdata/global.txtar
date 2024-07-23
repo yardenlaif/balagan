@@ -1,0 +1,30 @@
+# Test that balagan obfuscates global variables
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'globalString globalVar'
+! checkSymbol main.go 'globalString'
+! checkSymbol main.go 'globalVar'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+const globalString = "globalString"
+var globalVar = "globalVar"
+
+func main() {
+	fmt.Printf("%s %s\n", globalString, globalVar)
+}

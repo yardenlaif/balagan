@@ -1,0 +1,27 @@
+# Test that balagan obfuscates variable names
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'myVar: 3'
+! checkSymbol main.go 'myVar'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+func main() {
+	myVar := 3
+	fmt.Printf("myVar: %d\n", myVar)
+}

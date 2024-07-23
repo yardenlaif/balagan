@@ -1,0 +1,45 @@
+# Test that balagan doesn't obfuscate type switch assignments
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'implementer1: '
+checkSymbol main.go 'actualType'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+type myInterface interface {
+	foo()
+}
+
+type implementer1 struct{}
+func (i *implementer1) foo() {}
+
+type implementer2 struct{}
+func (i *implementer2) foo() {}
+
+func main() {
+	var myVar myInterface
+	myVar = &implementer1{}
+	switch actualType := myVar.(type) {
+	case *implementer1:
+		fmt.Printf("implementer1: %T\n", actualType)
+	case *implementer2:
+		fmt.Printf("implementer2: %T\n", actualType)
+	default:
+		fmt.Printf("no implementer: %T\n", actualType)
+	}
+}

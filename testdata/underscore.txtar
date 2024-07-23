@@ -1,0 +1,21 @@
+# Test that balagan doesn't obfuscate underscores
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+startsWithUnderscore ./main.go 4
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+func main() {
+	_ = 3
+}

@@ -1,0 +1,31 @@
+# Test that balagan obfuscates struct methods
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'Foo called'
+! checkSymbol main.go 'foo'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+type myType struct {}
+
+func (m *myType) foo() { fmt.Println("Foo called") }
+
+func main() {
+	m := &myType{}
+	m.foo()
+}

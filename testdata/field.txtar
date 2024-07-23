@@ -1,0 +1,31 @@
+# Test that balagan obfuscates struct field names
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'myField: 3'
+! checkSymbol main.go 'myField'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+type myType struct {
+	myField int
+}
+
+func main() {
+	m := &myType{myField: 3}
+	fmt.Printf("myField: %d\n", m.myField)
+}

@@ -1,0 +1,38 @@
+# Test that balagan doesn't break a type's implementation of an interface
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'foo called'
+checkSymbol main.go 'foo'
+checkSymbol interface.go 'foo'
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import "fmt"
+
+type myType struct{}
+
+func (m *myType) foo() {
+	fmt.Println("foo called")
+}
+
+func main() {
+	var m myInterface = &myType{}
+	m.foo()
+}
+-- source/interface.go --
+package main
+
+type myInterface interface { foo() }
