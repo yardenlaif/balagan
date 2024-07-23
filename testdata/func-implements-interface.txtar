@@ -1,4 +1,4 @@
-# Test that balagan obfuscates function names even though they implement interfaces
+# Test that balagan obfuscates function names even though they appear in interfaces
 
 exists balagan
 mkdir source

@@ -1,4 +1,4 @@
-# Test that balagan doesn't break a type's implementation of an interface
+# Test that balagan obfuscates exported functions and their uses
 
 exists balagan
 mkdir source

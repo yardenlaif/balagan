@@ -1,4 +1,4 @@
-# Test that balagan doesn't obfuscate init functions
+# Test that balagan obfuscates variable names
 
 exists balagan
 mkdir source

@@ -1,0 +1,49 @@
+# Test that balagan supports obfuscating files that are excluded by build tags
+
+skip 'Merging files is currently not supported'
+
+exists balagan
+mkdir source
+cd source
+exec ../balagan -s . -t ../target
+
+cd ../target
+exec go build .
+exec ./main
+stdout 'One\nTwo'
+! checkSymbol main.go 'One'
+! checkSymbol main.go 'Two'
+! exists pkg/one.go pkg/two.go
+
+
+-- source/go.mod --
+module test/main
+
+go 1.22
+-- source/main.go --
+package main
+
+import (
+	"test/main/pkg"
+)
+
+func main() {
+	pkg.One()
+	pkg.Two()
+}
+-- source/pkg/one.go --
+package pkg
+
+import "fmt"
+
+func One() {
+	fmt.Println("One")
+}
+-- source/pkg/two.go --
+package pkg
+
+import "fmt"
+
+func Two() {
+	fmt.Println("Two")
+}
