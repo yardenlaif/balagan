@@ -51,7 +51,9 @@ func startsWithUnderscore(ts *testscript.TestScript, neg bool, args []string) {
 	}
 	text := scanner.Text()
 	trimmed := strings.Trim(text, " \t")
-	if trimmed[0] != '_' {
+	if neg && trimmed[0] == '_' {
+		ts.Fatalf("%s:%d starts with underscore: %s", filename, line, text)
+	} else {
 		ts.Fatalf("%s:%d does not start with underscore: %s", filename, line, text)
 	}
 }
